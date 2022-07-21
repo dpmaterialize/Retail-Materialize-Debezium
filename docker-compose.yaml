@@ -1,0 +1,87 @@
+version: "3.7"
+services:
+  postgres:
+    image: debezium/postgres:12
+    ports:
+      - 5432:5432
+    environment:
+      - POSTGRES_USER=docker
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zookeeper:
+    image: debezium/zookeeper:1.1
+    ports:
+      - 2181:2181
+      - 2888:2888
+      - 3888:3888
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    healthcheck:
+      test: /zookeeper/bin/zkServer.sh print-cmd || exit 1
+      interval: 1m
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+  kafka:
+    image: debezium/kafka:1.1
+    ports:
+      - 9092:9092
+    environment:
+      ZOOKEEPER_CONNECT: zookeeper:2181
+    depends_on:
+      zookeeper: {condition: service_healthy}
+    healthcheck:
+      test: /kafka/bin/kafka-topics.sh --list --zookeeper zookeeper:2181 || exit 1
+      interval: 1m
+      timeout: 15s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      zookeeper: {condition: service_healthy}
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.0.1
+    ports:
+      - 8081:8081
+    environment:
+      - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka:9092
+      - SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL=zookeeper:2181
+      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+      - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
+    depends_on:
+      zookeeper: {condition: service_healthy}
+      kafka: {condition: service_healthy}
+
+  connect:
+    image: debezium/connect:1.1
+    ports:
+      - 8083:8083
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: debezium_group
+      CONFIG_STORAGE_TOPIC: debezium_storage_topic
+      OFFSET_STORAGE_TOPIC: debezium_offset_topic
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    depends_on:
+      kafka: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+
+
+  materialized:
+    image: materialize/materialized:v0.26.0
+    ports:
+      - 6875:6875
+
+  cli:
+    image: materialize/cli:v0.26.0
+
